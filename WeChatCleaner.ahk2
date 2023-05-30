@@ -1,0 +1,623 @@
+﻿#Requires AutoHotkey >=2.0-
+#SingleInstance Force
+SetWorkingDir A_ScriptDir
+
+CleanerGui := Gui(, "WeChatCleaner")
+CleanerGui.Add("Text", "x16 y16 w80 h23 +0x200", "文件位置：")
+locationEdit := CleanerGui.Add("Edit", "x80 y16 w300 h21")
+locationEdit.OnEvent("LoseFocus", LocationEdit_LoseFocus)
+browseBtn := CleanerGui.Add("Button", "x384 y16 w75 h23", "浏览")
+browseBtn.OnEvent("Click", BrowseBtn_Click)
+
+
+CleanerGui.Add("Text", "x16 y48 w465 h2 0x10")
+
+CleanerGui.Add("GroupBox", "x16 y60 w465 h88", "账号列表")
+accountList := CleanerGui.Add("DropDownList", "x40 y84 w150", [])
+accountList.OnEvent("Change", AccountList_Change)
+totalSizeText := CleanerGui.Add("Text", "x384 y84 w75 h23 +0x200 Center", "总大小")
+locationFullPathText := CleanerGui.Add("Text", "x40 y114 w340 h23 +0x200 R1")
+openRootBtn := CleanerGui.Add("Button", "x384 y108 w75 h23", "打开")
+openRootBtn.OnEvent("Click", OpenLocationBtn_Click)
+
+CleanerGui.Add("GroupBox", "x16 y160 w465 h154", "数据预览")
+checkBox := CleanerGui.Add("CheckBox", "x40 y184 w54 h23 Checked1 cRed", "仅删除")
+checkBox.OnEvent("Click", CheckBox_Click)
+dayEdit := CleanerGui.Add("Edit", "x93 y184 w24 h21 cRed Center Number", "30")
+dayEdit.OnEvent("LoseFocus", DayEdit_LoseFocus)
+CleanerGui.Add("Text", "x120 y184 w120 h23 +0x200 cRed", "天前的数据")
+CleanerGui.Add("Text", "x40 y208 w28 h23 +0x200", "文件")
+CleanerGui.Add("Text", "x40 y232 w28 h23 +0x200", "视频")
+CleanerGui.Add("Text", "x40 y256 w28 h23 +0x200", "图片")
+CleanerGui.Add("Text", "x40 y280 w28 h23 +0x200", "其他")
+fileSizeText := CleanerGui.Add("Text", "x80 y208 w70 h23 +0x200 Right")
+videoSizeText := CleanerGui.Add("Text", "x80 y232 w70 h23 +0x200 Right")
+imageSizeText := CleanerGui.Add("Text", "x80 y256 w70 h23 +0x200 Right")
+otherSizeText := CleanerGui.Add("Text", "x80 y280 w70 h23 +0x200 Right")
+delFileSizeText := CleanerGui.Add("Text", "x165 y208 w70 h23 +0x200 Right cRed")
+delVideoSizeText := CleanerGui.Add("Text", "x165 y232 w70 h23 +0x200 Right cRed")
+delImageSizeText := CleanerGui.Add("Text", "x165 y256 w70 h23 +0x200 Right cRed")
+delOtherSizeText := CleanerGui.Add("Text", "x165 y280 w70 h23 +0x200 Right cRed")
+openFileBtn := CleanerGui.Add("Button", "x265 y208 w75 h23", "打开")
+openFileBtn.OnEvent("Click", OpenFileFolderBtn_Click)
+openVideoBtn := CleanerGui.Add("Button", "x265 y232 w75 h23", "打开")
+openVideoBtn.OnEvent("Click", OpenVideoFolderBtn_Click)
+
+calcSizeBtn := CleanerGui.Add("Button", "x40 y324 w75 h23", "计算大小")
+calcSizeBtn.OnEvent("Click", GetAllSize)
+cleanBtn := CleanerGui.Add("Button", "x213 y324 w75 h23", "清理")
+cleanBtn.OnEvent("Click", CleanBtn_Click)
+aboutBtn := CleanerGui.Add("Button", "x384 y324 w75 h23", "关于")
+aboutBtn.OnEvent("Click", AboutBtn_Click)
+
+; 微信文件的保存位置
+global location := ""
+global accounts := []
+global excludedAccounts := ["All Users", "Applet", "WMPF"]
+global day := 30
+global check := true
+global delFiles := []
+global delDirs := []
+global delOtherFolders := ["\FileStorage\Cache\", "\FileStorage\CustomEmotion\", "\FileStorage\Fav\", "\FileStorage\General\", "\FileStorage\Image\", "\FileStorage\MPPageFastLoad\", "\FileStorage\PAG\", "\FileStorage\Sns\", "\FileStorage\Temp\", "\FileStorage\TempFromPhone\"]
+
+GetLocation()
+GetAccounts()
+GetAllSize()
+
+CleanerGui.Show("W500 H360")
+
+GetLocation()
+{
+    global location
+    try {
+        global location := RegRead("HKEY_CURRENT_USER\Software\Tencent\WeChat", "FileSavePath")
+    } catch Error as e {
+        ; 读取注册表失败
+    }
+    if location = "MyDocument:"
+    {
+        global location := A_MyDocuments "\WeChat Files"
+    }
+    if location != ""
+    {
+        locationEdit.value := location
+    }
+}
+
+GetAccounts()
+{
+    global location, accounts, excludedAccounts
+    if location = ""
+    {
+        return
+    }
+    loopPath := location "\*"
+
+    len := accounts.Length
+    Loop len
+    {
+        accounts.RemoveAt(-1)
+    }
+    loop Files loopPath, "D"
+    {
+        flag := False
+        For account in excludedAccounts
+        {
+            if account = A_LoopFileName
+            {
+                flag := true
+                break
+            }
+        }
+        if DirExist(location "\" A_LoopFileName)
+        {
+            hasSubFolder := False
+            subFolderPath := location "\" A_LoopFileName "\*"
+            loop files subFolderPath, "D"
+            {
+                if A_LoopFileName = "FileStorage"
+                {
+                    hasSubFolder := True
+                    break
+                }
+            }
+
+        }
+        if not flag and hasSubFolder
+        {
+            accounts.Push(A_LoopFileName)
+        }
+    }
+    accountList.Delete()
+    locationFullPathText.Value := ""
+    if accounts.Length != 0
+    {
+        accountList.Add(accounts)
+        accountList.Choose(1)
+        locationFullPathText.Value := location "\" accounts[1]
+    }
+}
+
+LocationEdit_LoseFocus(*)
+{
+    global location := locationEdit.Value
+    GetAccounts()
+    GetAllSize()
+}
+
+BrowseBtn_Click(*)
+{
+    SelectedFolder := DirSelect(, 4, "请选择微信文件的保存位置")
+    if SelectedFolder != ""
+    {
+        locationEdit.value := SelectedFolder
+        global location := SelectedFolder
+        GetAccounts()
+        GetAllSize()
+    }
+}
+
+OpenLocationBtn_Click(*)
+{
+    OpenFolder(locationFullPathText.Value)
+}
+
+CheckBox_Click(*)
+{
+    value := checkBox.Value
+    if value = 0
+    {
+        result := MsgBox("您确定要删除所有资料吗？", "警告", "1 48")
+        if result = "Cancel"
+        {
+            checkBox.Value := 1
+        }
+    }
+}
+
+AccountList_Change(accountList, Info)
+{
+    locationFullPathText.Value := location "\" accountList.Text
+    GetAllSize()
+}
+
+DayEdit_LoseFocus(*)
+{
+    value := dayEdit.Value
+    if not IsInteger(value) or value < 0
+    {
+        value := 0
+    }
+    global day := value
+    GetDelSize()
+}
+
+GetAllSize(*)
+{
+    if locationFullPathText.Value = ""
+    {
+        totalSizeText.Value := ""
+        fileSizeText.Value := ""
+        videoSizeText.Value := ""
+        imageSizeText.Value := ""
+        otherSizeText.Value := ""
+        delFileSizeText.Value := ""
+        delVideoSizeText.Value := ""
+        delImageSizeText.Value := ""
+        delOtherSizeText.Value := ""
+        return
+    }
+    realTotalSize := GetSize(locationFullPathText.Value "\FileStorage")
+    realFileSize := GetSize(locationFullPathText.Value "\FileStorage\File")
+    realVideoSize := GetSize(locationFullPathText.Value "\FileStorage\Video")
+    realImageSize := GetSize(locationFullPathText.Value "\FileStorage\MsgAttach")
+    realOtherSize := Format("{:.2f}", realTotalSize - realFileSize - realVideoSize - realImageSize)
+
+    totalSize := FormatSize(realTotalSize)
+    fileSize := FormatSize(realFileSize)
+    videoSize := FormatSize(realVideoSize)
+    imageSize := FormatSize(realImageSize)
+    otherSize := FormatSize(realOtherSize)
+    totalSizeText.Value := totalSize
+    fileSizeText.Value := fileSize
+    videoSizeText.Value := videoSize
+    imageSizeText.Value := imageSize
+    otherSizeText.Value := otherSize
+    GetDelSize()
+}
+
+GetDelSize()
+{
+    global day, delFiles, delDirs
+    delFiles := []
+    delDirs := []
+    if day = 0 or locationFullPathText.Value = ""
+    {
+        delFileSizeText.Value := ""
+        delVideoSizeText.Value := ""
+        delImageSizeText.Value := ""
+        delOtherSizeText.Value := ""
+        return
+    }
+    delFileSizeText.Value := FormatSize(GetDelFileSize())
+    delVideoSizeText.Value := FormatSize(GetDelVideoSize())
+    delImageSizeText.Value := FormatSize(GetDelImageSize())
+    delOtherSizeText.Value := FormatSize(GetDelOtherSize())
+}
+
+GetDelFileSize()
+{
+    global delFiles, delDirs, day
+    path := locationFullPathText.Value "\FileStorage\File\"
+    size := 0
+    if DirExist(path)
+    {
+        loop files path "*.*", "D"
+        {
+            folderName := A_LoopFileName
+            index := 0
+            fileNum := 0
+            loop files path folderName "\*.*", "F"
+            {
+                if DateDiff(A_Now, A_LoopFileTimeModified, "Days") > day
+                {
+                    delFiles.Push(A_LoopFileFullPath)
+                    size += A_LoopFileSize
+                    fileNum += fileNum
+                }
+                index += index
+            }
+            if index = fileNum
+            {
+                delDirs.Push(A_LoopFileDir)
+            }
+        }
+    }
+    return size
+}
+
+GetDelVideoSize()
+{
+    global delFiles, delDirs, day
+    path := locationFullPathText.Value "\FileStorage\Video\"
+    size := 0
+    if DirExist(path)
+    {
+        loop files path "*.*", "D"
+        {
+            folderName := A_LoopFileName
+            index := 0
+            fileNum := 0
+            loop files path folderName "\*.*", "F"
+            {
+                if DateDiff(A_Now, A_LoopFileTimeModified, "Days") > day
+                {
+                    delFiles.Push(A_LoopFileFullPath)
+                    size += A_LoopFileSize
+                    fileNum += fileNum
+                }
+                index += index
+            }
+            if index = fileNum
+            {
+                delDirs.Push(A_LoopFileDir)
+            }
+        }
+    }
+    return size
+}
+
+GetDelImageSize()
+{
+    global delFiles, delDirs, day
+    path := locationFullPathText.Value "\FileStorage\MsgAttach\"
+    size := 0
+    if DirExist(path)
+    {
+        loop files path "*.*", "FR"
+        {
+            if DateDiff(A_Now, A_LoopFileTimeModified, "Days") > day
+            {
+                delFiles.Push(A_LoopFileFullPath)
+                size += A_LoopFileSize
+            }
+        }
+    }
+    return size
+}
+
+GetDelOtherSize()
+{
+    global delFiles, delDirs, day, delOtherFolders
+    size := 0
+    for folder in delOtherFolders
+    {
+        path := locationFullPathText.Value folder
+        if DirExist(path)
+        {
+            loop files path "*.*", "FR"
+            {
+                if DateDiff(A_Now, A_LoopFileTimeModified, "Days") > day
+                {
+                    delFiles.Push(A_LoopFileFullPath)
+                    size += A_LoopFileSize
+                }
+            }
+        }
+    }
+    return size
+}
+
+GetSize(path)
+{
+    size := 0
+    Loop Files, path "\*.*", "R"
+    {
+        size += A_LoopFileSize
+    }
+    return size
+}
+
+GetSizeWithUnit(path)
+{
+    size := 0
+    Loop Files, path "\*.*", "R"
+    {
+        size += A_LoopFileSize
+    }
+    size := Format("{:.2f}", size / 1024 / 1024)
+    if size > 1024
+    {
+        size := Format("{:.2f}", size / 1024) "GB"
+    }
+    else
+    {
+        size := size "MB"
+    }
+    return size
+}
+
+FormatSize(size)
+{
+    size := Format("{:.2f}", size / 1024 / 1024)
+    if size > 1024
+    {
+        size := Format("{:.2f}", size / 1024) " GB"
+    }
+    else
+    {
+        size := size " MB"
+    }
+    return size
+}
+
+OpenFileFolderBtn_Click(*)
+{
+    OpenFolder(locationFullPathText.Value "\FileStorage\File")
+}
+
+OpenVideoFolderBtn_Click(*)
+{
+    OpenFolder(locationFullPathText.Value "\FileStorage\Video")
+}
+
+OpenFolder(path)
+{
+    if DirExist(path)
+    {
+        Run(path)
+    }
+    else
+    {
+        MsgBox("路径错误，打开微信文件目录失败！")
+    }
+}
+
+DelAllEmptyDir()
+{
+    global delOtherFolders
+    paths := [locationFullPathText.Value "\FileStorage\MsgAttach\"]
+    for folder in delOtherFolders
+    {
+        paths.Push(locationFullPathText.Value folder)
+    }
+    Loop 5
+    {
+        for path in paths
+        {
+            DelEmptyDir(path)
+        }
+    }
+}
+
+DelEmptyDir(dir)
+{
+    if DirExist(dir)
+    {
+        num := 0
+        loop files dir "\*.*", "FD"
+        {
+            DelEmptyDir(A_LoopFileFullPath)
+            num := num + 1
+        }
+        if num = 0
+        {
+            try
+            {
+                DirDelete dir
+            }
+            catch Error as e
+            {
+                ; Delete folder failed!
+            }
+        }
+    }
+}
+
+CleanBtn_Click(*)
+{
+    global delFiles, delDirs
+    checked := checkBox.Value
+    if checked = 0
+    {
+        DelAllData()
+    }
+    else if checked = 1 and dayEdit.Value = 0
+    {
+        result := MsgBox("您确定要删除所有资料吗？", "警告", "1 48")
+        if result = "OK"
+        {
+            DelAllData()
+        }
+        else
+        {
+            dayEdit.Focus()
+        }
+    }
+    else
+    {
+        DelDataByDay()
+    }
+}
+
+DelDataByDay()
+{
+    locationEdit.Enabled := false
+    browseBtn.Enabled := false
+    accountList.Enabled := false
+    openRootBtn.Enabled := false
+    checkBox.Enabled := false
+    dayEdit.Enabled := false
+    openFileBtn.Enabled := false
+    openVideoBtn.Enabled := false
+    calcSizeBtn.Enabled := false
+    cleanBtn.Enabled := false
+    for file in delFiles
+    {
+        try {
+            FileSetAttrib "-R", file
+            FileDelete file
+        } catch Error as e {
+            ; Delete file failed!
+            MsgBox(e.Message)
+        }
+    }
+    for dir in delDirs
+    {
+        try {
+            DirDelete dir
+        } catch Error as e {
+            ; Delete dir failed!
+        }
+    }
+    DelAllEmptyDir()
+    TrayTip "清理完成", "提示", "Iconi"
+    GetAllSize()
+    locationEdit.Enabled := true
+    browseBtn.Enabled := true
+    accountList.Enabled := true
+    openRootBtn.Enabled := true
+    checkBox.Enabled := true
+    dayEdit.Enabled := true
+    openFileBtn.Enabled := true
+    openVideoBtn.Enabled := true
+    calcSizeBtn.Enabled := true
+    cleanBtn.Enabled := true
+}
+
+DelAllData()
+{
+    locationEdit.Enabled := false
+    browseBtn.Enabled := false
+    accountList.Enabled := false
+    openRootBtn.Enabled := false
+    checkBox.Enabled := false
+    dayEdit.Enabled := false
+    openFileBtn.Enabled := false
+    openVideoBtn.Enabled := false
+    calcSizeBtn.Enabled := false
+    cleanBtn.Enabled := false
+    global delOtherFolders
+    paths := [locationFullPathText.Value "\FileStorage\File\", locationFullPathText.Value "\FileStorage\Video\", locationFullPathText.Value "\FileStorage\MsgAttach\"]
+    for folder in delOtherFolders
+    {
+        paths.Push(locationFullPathText.Value folder)
+    }
+    MsgBox(paths.Length)
+    for path in paths
+    {
+        MsgBox(path)
+        Loop 5
+        {
+            loop files path "*.*", "R"
+            {
+                ; DelData(A_LoopFileFullPath)
+                MsgBox(A_LoopFileFullPath)
+                try {
+                    if DirExist(A_LoopFileFullPath)
+                    {
+                        DirDelete A_LoopFileFullPath, 1
+                    }
+                    else
+                    {
+                        FileDelete A_LoopFileFullPath
+                    }
+                } catch Error as err {
+                    ; Delete dir and file failed!
+                    MsgBox Format("{1}: {2}.`n`nFile:`t{3}`nLine:`t{4}`nWhat:`t{5}`nStack:`n{6}"
+                        , type(err), err.Message, err.File, err.Line, err.What, err.Stack)
+                }
+            }
+            Sleep 100
+        }
+    }
+    TrayTip "清理完成", "提示", "Iconi"
+    GetAllSize()
+    locationEdit.Enabled := true
+    browseBtn.Enabled := true
+    accountList.Enabled := true
+    openRootBtn.Enabled := true
+    checkBox.Enabled := true
+    dayEdit.Enabled := true
+    openFileBtn.Enabled := true
+    openVideoBtn.Enabled := true
+    calcSizeBtn.Enabled := true
+    cleanBtn.Enabled := true
+}
+
+DelData(path)
+{
+    if FileExist(path)
+    {
+        try {
+            FileDelete path
+        } catch Error as e {
+            ; Delete file failed!
+        }
+    }
+    if DirExist(path)
+    {
+        num := 0
+        loop files path "\*.*", "R"
+        {
+            DelData(A_LoopFileFullPath)
+            num := num + 1
+        }
+        if num = 0
+        {
+            try
+            {
+                DirDelete path
+            }
+            catch Error as e
+            {
+                ; Delete folder failed!
+            }
+        }
+    }
+}
+
+AboutBtn_Click(*)
+{
+    MsgBox("说明：1.清理前请先退出微信`n          2.可直接在输入框中输入微信文件位置`n版本：v1.0.0`n作者：HaleShaw`n源码：https://github.com/HaleShaw/WeChatCleaner", "WeChatCleaner - 关于", "0")
+}
