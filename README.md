@@ -2,8 +2,6 @@
 
 清理微信 Windows 版缓存文件
 
-![WeChatCleanerIcon](https://raw.githubusercontent.com/HaleShaw/WeChatCleaner/main/assets/WeChatCleaner.ico)
-
 ![WeChatCleaner](https://raw.githubusercontent.com/HaleShaw/WeChatCleaner/main/screenshots/WeChatCleaner.png)
 
 ## 说明
