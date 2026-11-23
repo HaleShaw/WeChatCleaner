@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -18,7 +18,7 @@ using System.Text;
 
 namespace WeChatCleaner {
 
- public class MainWindow : Window {
+ public partial class MainWindow : Window {
   readonly List<SourceEntry> sources = new List<SourceEntry>();
   readonly List<Account> accounts = new List<Account>();
   Account current;
@@ -26,6 +26,7 @@ namespace WeChatCleaner {
   CancellationTokenSource cancel, startupSearch;
   bool discovering = true, started;
   readonly Func<DiscoveryLocations> discoveryLocations;
+  readonly Func<Account,Identity> resolveName;
   AppSettings settings;
   DuplicateResult dupResult;
   bool duplicateBusy;
@@ -46,7 +47,8 @@ namespace WeChatCleaner {
   Button scanBtn, clearBtn, reviewBtn;
   Border bannerBox;
   TextBlock bannerText;
-  StackPanel settingsPanel;
+  StackPanel settingsCards, imageKeyRows;
+  ProfileLocation profileLocation;
   TableView duplicateTable;
   TextBlock dupSummary, dupCount, dupPageLabel;
   Button duplicateSearch, dupPrevious, dupNext;
@@ -56,6 +58,7 @@ namespace WeChatCleaner {
   readonly Dictionary<string,TextBlock> dupSortMarks = new Dictionary<string,TextBlock>();
   int filterDays = 30;
   bool changingAge;
+  static readonly long[] SizeLimits={0,10L*1024*1024,100L*1024*1024,1024L*1024*1024};
   ProgressBar progress;
   TextBlock statusText;
   Border toastBorder;
@@ -67,8 +70,9 @@ namespace WeChatCleaner {
   static string AppVersion { get { return typeof(MainWindow).Assembly.GetName().Version.ToString(3); } }
 
   public MainWindow() : this(DiscoveryLocations.Windows) { }
-  internal MainWindow(Func<DiscoveryLocations> discoveryLocations) {
+  internal MainWindow(Func<DiscoveryLocations> discoveryLocations,Func<Account,Identity> resolveName=null) {
    this.discoveryLocations = discoveryLocations;
+   this.resolveName = resolveName ?? new Func<Account,Identity>(NameResolver.Resolve);
    Title = "WeChat Cleaner";
    var workArea = SystemParameters.WorkArea;
    Width = Math.Min(1400,workArea.Width); Height = Math.Min(870,workArea.Height);
@@ -77,6 +81,7 @@ namespace WeChatCleaner {
    WindowStartupLocation = WindowStartupLocation.CenterScreen;
    Background = Ui.Canvas;
    Icon = BrandIcon.Source;
+   profileLocation=ProfileStorage.App.Current;
    settings = AppSettings.Load();
    filterDays = settings.Days;
    try {
@@ -92,7 +97,9 @@ namespace WeChatCleaner {
    RefreshDuplicatesPage();
    Loaded += delegate {
     if (started) return;
-    started = true; clientTimer.Start(); SearchAtStartup();
+    started = true; clientTimer.Start();
+    if (profileLocation.Problem==null) SearchAtStartup();
+    else { discovering=false; RefreshTree(); RefreshOverview(); ShowPage("settings"); }
    };
    Closed += delegate {
     if (startupSearch != null) startupSearch.Cancel();
@@ -355,7 +362,7 @@ namespace WeChatCleaner {
    filters.Children.Add(ageBox);
    sizeBox = new ComboBox { Width = 115, Height = 32 };
    foreach (string s in new string[]{"大小不限","至少 10 MB","至少 100 MB","至少 1 GB"}) sizeBox.Items.Add(s);
-   sizeBox.SelectedIndex = settings.MinBytes == 10L*1024*1024 ? 1 : settings.MinBytes == 100L*1024*1024 ? 2 : settings.MinBytes == 1024L*1024*1024 ? 3 : 0;
+   sizeBox.SelectedIndex = Math.Max(0,Array.IndexOf(SizeLimits,settings.MinBytes));
    sizeBox.Margin = new Thickness(0,0,10,0);
    sizeBox.VerticalAlignment = VerticalAlignment.Center;
    AutomationProperties.SetName(sizeBox,"文件大小");
@@ -540,83 +547,88 @@ namespace WeChatCleaner {
 
   #region settings page
   Grid BuildSettingsPage() {
-   var g = WorkbenchPage("清理设置",Ui.Label("设置扫描范围和处理方式。",12,Ui.Muted,false));
-
-   var body = new Border { Background = Brushes.White, CornerRadius = new CornerRadius(12), BorderBrush = Ui.Brush("#E5EDE8"), BorderThickness = new Thickness(1), VerticalAlignment = VerticalAlignment.Top };
-   settingsPanel = new StackPanel();
-   Ui.ClipCorners(settingsPanel,11);
-   body.Child = settingsPanel;
-   Grid.SetRow(body, 1);
-   g.Children.Add(body);
-   BuildSettingsRows();
+   var g=WorkbenchPage("清理设置",Ui.Label("管理清理规则、配置目录、图片密钥和媒体预览。",12,Ui.Muted,false));
+   settingsCards=new StackPanel();
+   var scroll=new ScrollViewer { Content=settingsCards,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,VerticalScrollBarVisibility=ScrollBarVisibility.Auto };
+   Grid.SetRow(scroll,1); g.Children.Add(scroll);
+   RebuildSettingsCards();
    return g;
   }
-
-  void BuildSettingsRows() {
-   settingsPanel.Children.Clear();
-   var mode = new ComboBox { Width=155 };
-   mode.Items.Add("移至回收站"); mode.Items.Add("直接删除");
-   mode.SelectedIndex = settings.PermanentDelete ? 1 : 0;
-   AutomationProperties.SetName(mode,"清理方式");
-   TextBlock modeDesc;
-   settingsPanel.Children.Add(PanelRow("清理方式",ModeDescription(),mode,out modeDesc));
-   mode.SelectionChanged += delegate {
-    if (mode.SelectedIndex<0) return;
-    settings.PermanentDelete = mode.SelectedIndex==1; settings.Save(); modeDesc.Text=ModeDescription();
-   };
-   var keep = new ComboBox { Width=155, IsEditable=true, IsTextSearchEnabled=false };
-   foreach (int d in new[]{30,90,180,365}) keep.Items.Add(AgeText(d));
-   if (settings.Days>0 && !keep.Items.Contains(AgeText(settings.Days))) keep.Items.Add(AgeText(settings.Days));
-   keep.Items.Add("所有时间"); keep.Items.Add("自定义…"); keep.SelectedItem=AgeText(settings.Days);
-   bool changing = false;
-   Action<string> saveDays = delegate(string value) {
-    if (changing) return;
-    int d;
-    if (TryDays(value,out d) && d!=settings.Days) {
-     settings.Days=d; settings.Save(); DisplayAge(d); ApplyFilter();
-    }
-    changing=true;
-    string label=AgeText(settings.Days);
-    if (!keep.Items.Contains(label)) keep.Items.Insert(keep.Items.Count-1,label);
-    keep.SelectedItem=label; keep.Text=label; changing=false;
-   };
-   keep.SelectionChanged += delegate { if ((string)keep.SelectedItem=="自定义…") Ui.FocusEdit(keep); else if (keep.SelectedIndex>=0) saveDays(keep.SelectedItem as string); };
-   Ui.ApplyOnExit(keep,delegate { saveDays(Ui.EditText(keep)); });
-   AutomationProperties.SetName(keep,"默认保留时间");
-   settingsPanel.Children.Add(PanelRow("默认保留时间","应用到账号页的时间筛选；也可在账号页临时更改。",keep));
-   var fixedRule = Ui.Label("始终开启",12,Ui.Accent,true);
-   settingsPanel.Children.Add(PanelRow("跳过目录联接","扫描和清理时跳过符号链接与目录联接，防止跨出账号目录。",fixedRule));
-  }
-  string ModeDescription() {
-   return settings.PermanentDelete ? "文件会被永久删除。每次清理前仍会再次确认。" : "默认方式。可在 Windows 回收站中找回已回收的文件。";
-  }
-  Border PanelRow(string title, string desc, UIElement control) {
-   TextBlock ignored;
-   return PanelRow(title, desc, control, out ignored);
-  }
-
-  Border PanelRow(string title, string desc, UIElement control, out TextBlock descOut) {
-   var g = new Grid { Margin = new Thickness(20,14,20,14) };
-   g.ColumnDefinitions.Add(new ColumnDefinition{ Width = new GridLength(1, GridUnitType.Star) });
-   g.ColumnDefinitions.Add(new ColumnDefinition{ Width = GridLength.Auto });
-   var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0,0,20,0) };
-   left.Children.Add(Ui.Label(title, 13, Ui.Ink, true));
-   var d = Ui.Label(desc, 11.5, Ui.Muted, false);
-   descOut = d;
-   d.Margin = new Thickness(0,4,0,0);
-   left.Children.Add(d);
-   g.Children.Add(left);
-   if (control != null) {
-    var fe = control as FrameworkElement;
-    if (fe != null) fe.VerticalAlignment = VerticalAlignment.Center;
-    Grid.SetColumn(control, 1);
-    g.Children.Add(control);
+  void RebuildSettingsCards() {
+   settingsCards.Children.Clear();
+   var cards=new[] { BuildCleanupSettings(),BuildProfileSettings(),BuildImageKeySettings(),BuildMediaSettings() };
+   foreach (var card in cards) {
+    var border=Panel(card,new Thickness(20,13,20,13));
+    if (settingsCards.Children.Count>0) border.Margin=new Thickness(0,12,0,0);
+    settingsCards.Children.Add(border);
    }
-   return new Border { Child = g, BorderBrush = Ui.Brush("#EFF4F0"), BorderThickness = new Thickness(0,1,0,0) };
   }
-  #endregion
 
-  #region about page
+  FrameworkElement BuildMediaSettings() {
+   var panel=new StackPanel();
+   var head=new DockPanel();
+   var download=Ui.ActionButton("FFmpeg 官方下载 ↗","用默认浏览器打开 FFmpeg 官网的 Windows 下载页",delegate {
+    try { Process.Start(new ProcessStartInfo("https://ffmpeg.org/download.html#build-windows") { UseShellExecute=true }); }
+    catch (Exception) { Toast("无法打开 FFmpeg 下载页，请检查默认浏览器设置。"); }
+   });
+   AutomationProperties.SetName(download,"FFmpeg 官方下载");
+   DockPanel.SetDock(download,Dock.Right); head.Children.Add(download); head.Children.Add(Ui.Label("媒体预览",15,Ui.Ink,true));
+   panel.Children.Add(head);
+   var explanation=Ui.Label("FFmpeg 用于把微信 WXGF 图片转为 PNG，以及把支持的音频（如 AMR、WAV）转为 MP3。企业微信 SILK 语音可直接转换。",12,Ui.Muted,false);
+   explanation.Margin=new Thickness(0,5,0,12); panel.Children.Add(explanation);
+   panel.Children.Add(Ui.Label("FFmpeg 程序路径",12,Ui.Ink,true));
+   var field=new Grid { Margin=new Thickness(0,5,0,0) };
+   field.ColumnDefinitions.Add(new ColumnDefinition());
+   field.ColumnDefinitions.Add(new ColumnDefinition {Width=GridLength.Auto});
+   field.ColumnDefinitions.Add(new ColumnDefinition {Width=GridLength.Auto});
+   var pathBox=new TextBox { Text=settings.FfmpegPath??"", VerticalAlignment=VerticalAlignment.Center,
+    ToolTip="填写 FFmpeg 程序的绝对路径。留空后保存可移除本机设置。" };
+   AutomationProperties.SetName(pathBox,"FFmpeg 程序路径"); field.Children.Add(pathBox);
+   var status=Ui.Label("",11.5,Ui.Muted,false); status.Margin=new Thickness(0,6,0,0);
+   Action<string,bool> showStatus=delegate(string text,bool error) { status.Text=text; status.Foreground=error ? Ui.Brush("#B83D3D") : Ui.Muted; };
+   Action describe=delegate {
+    var resolved=AttachmentMedia.ResolveFfmpeg(settings.FfmpegPath);
+    if (!String.IsNullOrEmpty(settings.FfmpegPath))
+     showStatus(resolved==null ? "已设置的程序路径不可用，请重新选择。" : "已配置。查看和另存时会使用此程序。",resolved==null);
+    else showStatus(resolved==null ? "选填。下载并解压后，选择本机的 ffmpeg.exe。" : "未配置程序路径，当前使用 WCC_FFMPEG 环境变量。",false);
+   };
+   Action commit=delegate {
+    string value=pathBox.Text.Trim(); string parsed=null;
+    if (value.Length!=0 && !AttachmentMedia.TryFfmpegPath(value,out parsed)) {
+     showStatus("请选择本机实际存在的 ffmpeg.exe 文件，不要选择目录或快捷方式。",true); return;
+    }
+    string before=settings.FfmpegPath;
+    settings.FfmpegPath=parsed;
+    if (!settings.Save()) { settings.FfmpegPath=before; showStatus("无法写入设置，原配置仍在使用。",true); return; }
+    pathBox.Text=parsed??"";
+    describe();
+   };
+   var browse=Ui.Button("浏览…",delegate {
+    var picker=new Microsoft.Win32.OpenFileDialog { Title="选择 FFmpeg 程序",CheckFileExists=true,
+     Filter="FFmpeg (ffmpeg*.exe)|ffmpeg*.exe",FileName="ffmpeg.exe" };
+    string parsed;
+    if (AttachmentMedia.TryFfmpegPath(pathBox.Text,out parsed)) {
+     picker.InitialDirectory=Path.GetDirectoryName(parsed);
+     picker.FileName=Path.GetFileName(parsed);
+    } else picker.InitialDirectory=Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+    try {
+     if (picker.ShowDialog(this)==true) { pathBox.Text=picker.FileName; commit(); }
+    } catch (System.ComponentModel.Win32Exception) { showStatus("无法打开文件选择器，可直接填写程序路径。",true); }
+   },"GhostButton");
+   browse.Margin=new Thickness(8,0,0,0); AutomationProperties.SetName(browse,"浏览 FFmpeg 程序");
+   Grid.SetColumn(browse,1); field.Children.Add(browse);
+   var save=Ui.Button("保存",commit,"PrimaryButton"); save.Margin=new Thickness(8,0,0,0);
+   AutomationProperties.SetName(save,"保存 FFmpeg 路径"); Grid.SetColumn(save,2); field.Children.Add(save);
+   pathBox.TextChanged+=delegate {
+    if (String.Equals(pathBox.Text,settings.FfmpegPath??"",StringComparison.Ordinal)) describe();
+    else showStatus("按回车或点击「保存」应用路径。留空并保存可移除。",false);
+   };
+   pathBox.KeyDown+=delegate(object sender,KeyEventArgs e) { if (e.Key==Key.Enter) { e.Handled=true; commit(); } };
+   panel.Children.Add(field); panel.Children.Add(status); describe();
+
+   return panel;
+  }
+
   Grid BuildAboutPage() {
    var g = WorkbenchPage("关于",Ui.Label("WeChat Cleaner · 微信 / 企业微信存储清理工具",12,Ui.Muted,false));
 
@@ -706,6 +718,11 @@ namespace WeChatCleaner {
      if (label != null) { label.Foreground = active ? Ui.Brush("#11784E") : Ui.Ink; label.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal; }
     }
    }
+   if (name=="settings") {
+    var resolved=ProfileStorage.App.Current;
+    if (resolved.Problem!=profileLocation.Problem || resolved.Mode!=profileLocation.Mode || !SamePath(resolved.Path,profileLocation.Path)) ReloadProfile(resolved);
+    RefreshImageKeySettings();
+   }
   }
   #endregion
 
@@ -728,18 +745,18 @@ namespace WeChatCleaner {
    } catch (Exception ex) {
     DebugLog("启动查找数据源失败："+ex.GetType().Name);
     found = new List<Account>();
-   } finally { startupSearch=null; search.Dispose(); }
+   } finally { if (startupSearch==search) startupSearch=null; search.Dispose(); }
    if (token.IsCancellationRequested || !IsLoaded) return;
 
    discovering=false;
    var seen=new HashSet<string>(accounts.Select(AccountKey),StringComparer.OrdinalIgnoreCase);
-   foreach (var account in found) if (seen.Add(AccountKey(account))) accounts.Add(account);
+   foreach (var account in found) if (!ProfileWithin(account.Path) && seen.Add(AccountKey(account))) accounts.Add(account);
    bool selectInitial = current==null;
    if (selectInitial) {
     current=accounts.FirstOrDefault(a=>SamePath(AccountKey(a),settings.LastAccount)) ?? accounts.FirstOrDefault();
     if (current!=null) scans.TryGetValue(AccountKey(current),out result);
    }
-   RefreshTree(); RefreshOverview();
+   RefreshTree(); RefreshOverview(); RefreshImageKeySettings();
    StartNameResolution(); RefreshClientInfo();
    if (selectInitial) ScanIfNeeded();
   }
@@ -801,7 +818,42 @@ namespace WeChatCleaner {
    menu.Items.Add(MenuAction("⧉", "复制完整路径", delegate {
     try { Clipboard.SetText(a.Path); Toast("已复制完整路径"); } catch (Exception ex) { Toast(ex.Message); }
    }));
+   menu.Items.Add(new Separator());
+   menu.Items.Add(MenuAction("−","移除数据源…",delegate { ConfirmRemoveSource(a); }));
    return menu;
+  }
+  void ConfirmRemoveSource(Account account) {
+   string root=account.DiscoveryRoot??account.Root??account.Path;
+   var body=new StackPanel();
+   body.Children.Add(Ui.Label("将此目录及其账号从数据源列表中移除。微信原文件和已保存的图片密钥都会保留。",13,Ui.Ink,false));
+   var path=Ui.Label(root,12,Ui.Muted,false); path.Margin=new Thickness(0,10,0,0); body.Children.Add(path);
+   var cancelButton=Ui.Button("取消",null,null); cancelButton.IsCancel=true;
+   var confirm=Ui.Button("移除数据源",null,"PrimaryButton");
+   var dialog=new ModalWindow(this,"移除数据源",body,Ui.ButtonRow(cancelButton,confirm),540,235,true);
+   confirm.Click+=delegate { dialog.DialogResult=true; };
+   if (dialog.ShowDialog()==true) Toast(RemoveSource(root,account.Kind) ? "已移除数据源；保存的图片密钥仍可管理。" : "无法保存数据源设置，原列表未变更。");
+  }
+  bool RemoveSource(string root,SourceKind kind) {
+   // Give old path-only records a display name before their source disappears.
+   try { AttachmentKeys.Rows(accounts); } catch (Exception ex) { if (!ProfileStorage.Expected(ex) && !(ex is FormatException)) throw; }
+   var next=sources.Where(s=>s.Kind!=kind || !SamePath(Engine.NormalPath(s.Path),root)).ToList();
+   next.Add(new SourceEntry { Kind=kind,Path=root,Excluded=true });
+   if (!SourceStore.Save(next)) return false;
+   ReloadSources();
+   return true;
+  }
+  bool ProfileWithin(string root) {
+   string path=profileLocation.Path;
+   return profileLocation.Problem==null && path!=null && (SamePath(root,path) || Engine.IsInside(root,path));
+  }
+  void ReloadSources() {
+   if (startupSearch!=null) startupSearch.Cancel();
+   namingGeneration++; CancelScan(); current=null; result=null; shownResult=null;
+   sources.Clear(); sources.AddRange(SourceStore.Load()); accounts.Clear(); scans.Clear();
+   dupResult=null; dupPageAnchor=0; scanStatus=""; clientInfo="";
+   discovering=profileLocation.Problem==null;
+   RefreshTree(); RefreshOverview(); RefreshDuplicatesPage(); RefreshImageKeySettings();
+   if (discovering && IsLoaded) SearchAtStartup();
   }
   MenuItem MenuAction(string icon, string header, Action click) {
    var mi = new MenuItem { Header = header, Icon = icon }; mi.Click += delegate { click(); }; return mi;
@@ -859,13 +911,16 @@ namespace WeChatCleaner {
      if (!IsFullyQualified(text) || !Directory.Exists(text)) { error.Text="请输入可访问目录的完整路径。"; return; }
      string path=Engine.NormalPath(text);
      var kind=(SourceKind)typeBox.SelectedIndex;
-     if (sources.Any(s=>s.Kind==kind&&SamePath(Engine.NormalPath(s.Path),path))) { error.Text="该数据源已添加。"; return; }
+     if (sources.Any(s=>!s.Excluded&&s.Kind==kind&&SamePath(Engine.NormalPath(s.Path),path))) { error.Text="该数据源已添加。"; return; }
      var found=Engine.Discover(path,kind);
      if (found.Count==0) { error.Text="未找到该类型的账号。请检查来源类型及目录。"; return; }
+     if (ProfileWithin(path) || found.Any(a=>ProfileWithin(a.Path))) { error.Text="配置目录位于此数据源中，请先在清理设置中迁移配置。"; return; }
      var existing=new HashSet<string>(accounts.Select(AccountKey),StringComparer.OrdinalIgnoreCase);
      var added=found.Where(a=>!existing.Contains(AccountKey(a))).ToList();
-     var source=new SourceEntry { Kind=kind,Path=path }; sources.Add(source);
-     if (!SourceStore.Save(sources)) { sources.Remove(source); error.Text="无法保存数据源配置。"; return; }
+     var next=sources.Where(s=>!s.Excluded || s.Kind!=kind || !SamePath(Engine.NormalPath(s.Path),path)).ToList();
+     next.Add(new SourceEntry { Kind=kind,Path=path });
+     if (!SourceStore.Save(next)) { error.Text="无法保存数据源配置。"; return; }
+     sources.Clear(); sources.AddRange(next);
      accounts.AddRange(added);
      modal.DialogResult=true;
      SelectAccount(added.Count>0 ? added[0] : accounts.First(a=>SamePath(AccountKey(a),AccountKey(found[0]))));
@@ -960,10 +1015,7 @@ namespace WeChatCleaner {
   }
   void ApplyFilter() {
    if (result==null) return;
-   long min=0;
-   if (sizeBox.SelectedIndex==1) min=10L*1024*1024;
-   else if (sizeBox.SelectedIndex==2) min=100L*1024*1024;
-   else if (sizeBox.SelectedIndex==3) min=1024L*1024*1024;
+   long min=SizeLimits[Math.Max(0,sizeBox.SelectedIndex)];
    Engine.Filter(result,filterDays,min,dateBox.SelectedIndex==1);
    UpdateStatistics();
   }
@@ -1038,7 +1090,7 @@ namespace WeChatCleaner {
    CancelScan();
    new DetailDialog(this,current,c,settings.PageSize,settings.PermanentDelete,
     delegate(int n) { settings.PageSize=n; settings.Save(); },
-    delegate(IEnumerable<string> paths) { RemoveDuplicatePaths(paths); ApplyFilter(); },OnCleanup).ShowDialog();
+    delegate(IEnumerable<string> paths) { RemoveDuplicatePaths(paths); ApplyFilter(); },OnCleanup,settings.FfmpegPath).ShowDialog();
    UpdateSelection();
   }
   void ConfirmClean() {
@@ -1160,7 +1212,7 @@ namespace WeChatCleaner {
    return String.Join("、",group.Files.Select(OwnerName).Distinct().ToArray());
   }
   void ShowDuplicateGroup(DuplicateGroup group) {
-   new DuplicateGroupDialog(this,group,settings.PermanentDelete,OwnerName,OnCleanup).ShowDialog();
+   new DuplicateGroupDialog(this,group,settings.PermanentDelete,OwnerName,OnCleanup,settings.FfmpegPath).ShowDialog();
   }
   #endregion
 
@@ -1171,7 +1223,7 @@ namespace WeChatCleaner {
    var resolved=await Task.Run(delegate {
     var names=new Dictionary<Account,Identity>();
     foreach (var account in snapshot) {
-     try { names[account]=NameResolver.Resolve(account); } catch (Exception ex) { DebugLog("名称识别失败：" + ex.GetType().Name); }
+     try { names[account]=resolveName(account); } catch (Exception ex) { DebugLog("名称识别失败：" + ex.GetType().Name); }
     }
     return names;
    });
@@ -1180,16 +1232,14 @@ namespace WeChatCleaner {
     if (kv.Value==null) continue;
     kv.Key.Nickname=kv.Value.Nickname; kv.Key.CorpName=kv.Value.CorpName; kv.Key.NameSource=kv.Value.Source;
    }
-   RefreshTree(); RefreshOverview(); RefreshDuplicatesPage(false);
+   RefreshTree(); RefreshOverview(); RefreshDuplicatesPage(false); RefreshImageKeySettings();
   }
   #endregion
 
   #region diagnostics
   internal static void DebugLog(string message) {
    try {
-    string dir = SourceStore.Folder;
-    System.IO.Directory.CreateDirectory(dir);
-    string file = System.IO.Path.Combine(dir, "debug.log");
+    string file=ProfileStorage.WritePath("debug.log");
     try { if (new FileInfo(file).Length > 256*1024) File.WriteAllText(file, ""); } catch {}
     System.IO.File.AppendAllText(file, DateTime.Now.ToString("HH:mm:ss") + " " + message + Environment.NewLine, Encoding.UTF8);
    } catch {}

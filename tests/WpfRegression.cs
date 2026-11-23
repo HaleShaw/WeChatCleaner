@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -16,7 +16,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace WeChatCleaner {
- internal static class WpfRegression {
+ internal static partial class WpfRegression {
   static readonly List<string> log=new List<string>();
   static string root, documents, old, newer, work, account, secondary, direct;
   static Account sample;
@@ -77,20 +77,25 @@ namespace WeChatCleaner {
   }
   [STAThread] public static void Main(string[] args) {
    bool readOnlyMachine=args.Length>0 && args[0]=="--machine-startup";
+   bool imageKeyActions=args.Length>0 && args[0]=="--image-key-actions";
    log.Add("Windows " + Environment.OSVersion.Version + " · " + (Environment.Is64BitProcess ? "x64" : "x86") + " process");
    string dir=Environment.GetEnvironmentVariable("WCC_TEST_DIR"); if (String.IsNullOrWhiteSpace(dir)) dir=Path.GetTempPath();
-   root=Path.Combine(dir,"wpf_"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
-   Environment.SetEnvironmentVariable("WCC_PROFILE_DIR",Path.Combine(root,"profile"));
+   root=Path.Combine(Path.GetFullPath(dir),"wpf_"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+   Environment.SetEnvironmentVariable("WCC_PROFILE_DIR",null);
+   ProfileStorage.App=new ProfileStorage(Path.Combine(root,"程序"),Path.Combine(root,"示例配置"));
    Program.ConfigureDpi();
    var app=new Application { ShutdownMode=ShutdownMode.OnExplicitShutdown };
    app.DispatcherUnhandledException+=delegate(object sender,DispatcherUnhandledExceptionEventArgs e) { log.Add("FAIL dispatcher: " + e.Exception); e.Handled=true; WriteLog(); app.Shutdown(1); };
    app.Resources.MergedDictionaries.Add((ResourceDictionary)XamlReader.Parse(Theme.Xaml));
-   if (!readOnlyMachine) Prepare();
-   main=readOnlyMachine ? new MainWindow() : new MainWindow(()=>new DiscoveryLocations { Documents=documents });
+   if (imageKeyActions) documents=Path.Combine(root,"示例文档");
+   else if (!readOnlyMachine) Prepare();
+   main=readOnlyMachine ? new MainWindow() : new MainWindow(()=>new DiscoveryLocations { Documents=documents },DemoIdentity);
    main.ShowActivated=false; main.Opacity=0;
    main.Loaded+=async delegate {
     try {
-     if (readOnlyMachine) await TestMachineStartup(); else await TestAll();
+     if (readOnlyMachine) await TestMachineStartup();
+     else if (imageKeyActions) { TestPaddedImageTails(); await Paint(main); await TestImageKeyFileActions(); }
+     else await TestAll();
      WriteLog(); app.Shutdown(0);
     }
     catch(Exception ex) { log.Add("FAIL " + ex); WriteLog(); app.Shutdown(1); }
@@ -142,7 +147,7 @@ namespace WeChatCleaner {
    Check(mode.SelectedIndex==0,"设置初始为回收站");
    keep.SelectedItem="超过 90 天"; mode.SelectedIndex=1;
    Check(AppSettings.Load().PermanentDelete&&AppSettings.Load().Days==90&&Get<ComboBox>(main,"ageBox").Text=="超过 90 天","默认天数生效与清理方式保存");
-   keep.SelectedItem="超过 73 天"; mode.SelectedIndex=0; Capture(main,"settings");
+   keep.SelectedItem="超过 73 天"; mode.SelectedIndex=0;
    Run(main,"SelectAccount",sample); await Paint(main);
    var result=Get<ScanResult>(main,"result"); var cat=result.Categories.Single(c=>c.RelativePath==@"FileStorage\File");
    Check(cat.MatchedCount==65&&result.TotalCount==92,"分类表与 65 条明细的数据正确");
@@ -176,6 +181,9 @@ namespace WeChatCleaner {
    Check(Get<ScanResult>(main,"result")==result&&Get<TextBlock>(main,"statusText").Text=="扫描已取消","取消扫描忽略回调");
    Click(sidebar["duplicates"]); await TestDuplicates(); TestProgress(); TestAddSource();
    await TestDelayedDiscovery();
+   TestPaddedImageTails();
+   await TestImageKeySettings();
+   await TestProfileSettings();
   }
   static Point HeadingOrigin(string page,string title) {
    return Visuals<TextBlock>(Get<Grid>(main,page)).Single(t=>t.Text==title).TranslatePoint(new Point(),main);
@@ -344,7 +352,7 @@ namespace WeChatCleaner {
    string original=Environment.GetEnvironmentVariable("WCC_PROFILE_DIR");
    using (var wait=new ManualResetEventSlim()) {
     Environment.SetEnvironmentVariable("WCC_PROFILE_DIR",Path.Combine(root,"profile-delayed"));
-    var late=new MainWindow(delegate { wait.Wait(5000); return new DiscoveryLocations { Documents=documents }; }) { ShowActivated=false,Opacity=0 };
+    var late=new MainWindow(delegate { wait.Wait(5000); return new DiscoveryLocations { Documents=documents }; },DemoIdentity) { ShowActivated=false,Opacity=0 };
     try {
      late.Show(); await Paint(late);
      Check(Get<bool>(late,"discovering")&&Get<List<Account>>(late,"accounts").Count==0,"查找未结束时界面可用且有查找状态");

@@ -18,6 +18,7 @@ namespace WeChatCleaner {
 
  public sealed class Account {
   public string Root, Path, Id;
+  internal string DiscoveryRoot;
   public SourceKind Kind;
   public string Nickname, CorpName, NameSource;
   public bool HasName { get { return !String.IsNullOrEmpty(Nickname); } }
@@ -102,11 +103,11 @@ namespace WeChatCleaner {
    if (!LinkFree(root) || !Directory.Exists(root)) return result;
    if (IsAccount(root, kind)) {
     var parent = Directory.GetParent(root);
-    AddAccount(result, parent==null?root:parent.FullName, root, kind);
+    AddAccount(result, parent==null?root:parent.FullName, root, kind, root);
    } else {
     foreach (var d in Directory.EnumerateDirectories(root).Take(maxChildren)) {
      if (stop()) break;
-     if (PlainDirectory(d) && IsAccount(d, kind)) AddAccount(result, root, d, kind);
+     if (PlainDirectory(d) && IsAccount(d, kind)) AddAccount(result, root, d, kind, root);
     }
    }
    return result.OrderBy(x=>x.Id, StringComparer.OrdinalIgnoreCase).ToList();
@@ -121,9 +122,9 @@ namespace WeChatCleaner {
    try { return (File.GetAttributes(path) & (FileAttributes.Directory|FileAttributes.ReparsePoint)) == FileAttributes.Directory; }
    catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; } catch (System.Security.SecurityException) { return false; }
   }
-  static void AddAccount(List<Account> list, string root, string p, SourceKind k) {
+  static void AddAccount(List<Account> list, string root, string p, SourceKind k,string discoveryRoot) {
    p = NormalPath(p);
-   list.Add(new Account { Root=NormalPath(root), Path=p, Id=Path.GetFileName(p), Kind=k });
+   list.Add(new Account { Root=NormalPath(root), Path=p, Id=Path.GetFileName(p), Kind=k, DiscoveryRoot=discoveryRoot });
   }
   #endregion
 
@@ -154,6 +155,11 @@ namespace WeChatCleaner {
     add("迁移数据",@"msg\migrate","历史迁移数据，需自行确认",false,RiskLevel.Recoverable);
     add("备份",@"Backup","备份，受保护",true,RiskLevel.Protected);
    } else {
+    add("聊天文件",@"Cache\File","本地聊天文件，删除后可能无法重新下载",false,RiskLevel.Irreplaceable);
+    add("聊天图片",@"Cache\Image","本地聊天图片，删除后可能无法重新下载",false,RiskLevel.Irreplaceable);
+    add("聊天视频",@"Cache\Video","本地聊天视频，删除后可能无法重新下载",false,RiskLevel.Irreplaceable);
+    add("聊天语音",@"Cache\Voice","本地语音消息，清理前可试听或另存",false,RiskLevel.Irreplaceable);
+    add("其他缓存数据",@"Cache","未识别用途的缓存，只统计、不清理",true,RiskLevel.Protected);
     add("企业微信缓存",@"WXWorkCefCache","可能影响本地显示，需确认",false,RiskLevel.Recoverable);
     add("临时文件",@"Temp","企业微信临时文件",false,RiskLevel.Recoverable);
     add("聊天数据",@"Data","聊天数据，受保护",true,RiskLevel.Protected);
@@ -162,6 +168,7 @@ namespace WeChatCleaner {
     add("微盘数据",@"WeDrive","企业数据，受保护",true,RiskLevel.Protected);
     add("表情",@"Emotion","表情数据，受保护",true,RiskLevel.Protected);
     add("备份",@"Backup","备份，受保护",true,RiskLevel.Protected);
+    add("其他账号文件",".","账号根文件与其他未分类目录，只统计、不清理",true,RiskLevel.Protected);
    }
    return c;
   }
@@ -173,34 +180,49 @@ namespace WeChatCleaner {
    r.Categories = Rules(a.Kind);
    if (!Directory.Exists(a.Path) || !LinkFree(a.Path)) { r.Errors.Add("账号目录不可访问：" + a.Path); return r; }
    int count = 0;
-   foreach (var c in r.Categories) {
-    if (cancel()) { r.Cancelled = true; return r; }
-    string start = Path.Combine(a.Path, c.RelativePath);
-    if (!Directory.Exists(start)) continue;
-    if (!LinkFree(start)) { r.Errors.Add("跳过链接或不可访问的目录：" + start); continue; }
-    var todo = new Stack<string>();
-    todo.Push(start);
-    while (todo.Count>0) {
-     if (cancel()) { r.Cancelled = true; return r; }
-     string dir = todo.Pop();
-     try {
-      if ((File.GetAttributes(dir)&FileAttributes.ReparsePoint)!=0) { r.Errors.Add("跳过链接目录："+dir); continue; }
-      foreach (string p in Directory.GetFiles(dir)) {
-       if (cancel()) { r.Cancelled = true; return r; }
-       try {
-        var fi = new FileInfo(p);
-        if ((fi.Attributes&FileAttributes.ReparsePoint)!=0) continue;
-        c.Files.Add(new Entry{ Path=fi.FullName, Name=fi.Name, Type=fi.Extension, Size=fi.Length,
-          Created=fi.CreationTime, Modified=fi.LastWriteTime, Category=c, OwnerRoot=a.Path, OwnerKind=a.Kind });
-        if (++count % 400 == 0) progress(count);
-       } catch (Exception ex) { r.Errors.Add(p+"："+ex.Message); }
-      }
-      foreach (string sub in Directory.GetDirectories(dir)) todo.Push(sub);
-     } catch (Exception ex) { r.Errors.Add(dir+"："+ex.Message); }
+   var root = NormalPath(a.Path);
+   if (a.Kind == SourceKind.Work) {
+    // Walk the account once; a nested rule replaces the inherited category.
+    var folders = r.Categories.ToDictionary(c=>NormalPath(Path.Combine(root,c.RelativePath)),StringComparer.OrdinalIgnoreCase);
+    if (!ScanTree(a,root,folders[root],folders,r,cancel,progress,ref count)) r.Cancelled=true;
+   } else {
+    foreach (var category in r.Categories) {
+     if (cancel()) { r.Cancelled=true; break; }
+     string start=Path.Combine(root,category.RelativePath);
+     if (!Directory.Exists(start)) continue;
+     if (!LinkFree(start)) { r.Errors.Add("跳过链接或不可访问的目录："+start); continue; }
+     if (!ScanTree(a,start,category,null,r,cancel,progress,ref count)) { r.Cancelled=true; break; }
     }
    }
-   progress(count);
+   if (!r.Cancelled) progress(count);
    return r;
+  }
+  static bool ScanTree(Account a,string start,Category first,Dictionary<string,Category> folders,
+     ScanResult result,Func<bool> cancel,Action<int> progress,ref int count) {
+   var todo = new Stack<KeyValuePair<string,Category>>();
+   todo.Push(new KeyValuePair<string,Category>(start,first));
+   while (todo.Count>0) {
+    if (cancel()) return false;
+    var next=todo.Pop();
+    string dir=next.Key;
+    Category category;
+    if (folders==null || !folders.TryGetValue(dir,out category)) category=next.Value;
+    try {
+     if ((File.GetAttributes(dir)&FileAttributes.ReparsePoint)!=0) { result.Errors.Add("跳过链接目录："+dir); continue; }
+     foreach (string p in Directory.EnumerateFiles(dir)) {
+      if (cancel()) return false;
+      try {
+       var fi=new FileInfo(p);
+       if ((fi.Attributes&FileAttributes.ReparsePoint)!=0) continue;
+       category.Files.Add(new Entry { Path=fi.FullName, Name=fi.Name, Type=fi.Extension, Size=fi.Length,
+        Created=fi.CreationTime, Modified=fi.LastWriteTime, Category=category, OwnerRoot=a.Path, OwnerKind=a.Kind });
+       if (++count%400==0) progress(count);
+      } catch (Exception ex) { result.Errors.Add(p+"："+ex.Message); }
+     }
+     foreach (string sub in Directory.EnumerateDirectories(dir)) todo.Push(new KeyValuePair<string,Category>(sub,category));
+    } catch (Exception ex) { result.Errors.Add(dir+"："+ex.Message); }
+   }
+   return true;
   }
   public static void Filter(ScanResult r, int days, long minBytes, bool created) {
    var cutoff = DateTime.Now.AddDays(-Math.Max(0, Math.Min(36500, days)));
@@ -251,14 +273,19 @@ namespace WeChatCleaner {
      reason = "文件受保护或不属于该账号"; return false;
     }
     var rules = CleanupRules[(int)file.OwnerKind];
-    if (!rules.Any(c => !c.Protected && IsInside(Path.Combine(root,c.RelativePath), file.Path)) ||
-        rules.Any(c => c.Protected && IsInside(Path.Combine(root,c.RelativePath), file.Path))) {
-     reason = "文件不在可清理分类内"; return false;
+    if (file.OwnerKind==SourceKind.Work) {
+     // The same most specific directory wins here and during scanning.
+     var rule=rules.FirstOrDefault(c=>IsInside(Path.Combine(root,c.RelativePath),file.Path));
+     if (rule==null || rule.Protected) { reason="文件不在可清理分类内"; return false; }
+    } else if (!rules.Any(c=>!c.Protected && IsInside(Path.Combine(root,c.RelativePath),file.Path)) ||
+               rules.Any(c=>c.Protected && IsInside(Path.Combine(root,c.RelativePath),file.Path))) {
+     reason="文件不在可清理分类内"; return false;
     }
     return Revalidate(file, root, out reason);
    } catch (Exception ex) { reason = ex.Message; return false; }
   }
-  static readonly List<Category>[] CleanupRules = { Rules(SourceKind.Old), Rules(SourceKind.New), Rules(SourceKind.Work) };
+  static readonly List<Category>[] CleanupRules = { Rules(SourceKind.Old), Rules(SourceKind.New),
+   Rules(SourceKind.Work).OrderByDescending(c=>c.RelativePath.Length).ToList() };
   #endregion
 
   #region client detection

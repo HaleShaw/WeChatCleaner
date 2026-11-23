@@ -140,6 +140,35 @@ namespace WeChatCleaner {
    </Setter>
   </Style>
 
+  <Style x:Key='ProfileModeRadio' TargetType='{x:Type RadioButton}'>
+   <Setter Property='FontSize' Value='12'/>
+   <Setter Property='Foreground' Value='#294338'/>
+   <Setter Property='Padding' Value='7,5,8,5'/>
+   <Setter Property='Template'>
+    <Setter.Value>
+     <ControlTemplate TargetType='{x:Type RadioButton}'>
+      <Border x:Name='shell' Padding='{TemplateBinding Padding}' CornerRadius='7' Background='Transparent' BorderBrush='Transparent' BorderThickness='1'>
+       <StackPanel Orientation='Horizontal'>
+        <Grid Width='13' Height='13' VerticalAlignment='Center' Margin='0,0,6,0'>
+         <Ellipse x:Name='ring' Fill='White' Stroke='#80998A' StrokeThickness='1.2'/>
+         <Ellipse x:Name='dot' Fill='#128253' Width='7' Height='7' Visibility='Collapsed'/>
+        </Grid>
+        <ContentPresenter VerticalAlignment='Center' RecognizesAccessKey='True'/>
+       </StackPanel>
+      </Border>
+      <ControlTemplate.Triggers>
+       <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='shell' Property='Background' Value='#F1F7F3'/></Trigger>
+       <Trigger Property='IsChecked' Value='True'>
+        <Setter TargetName='shell' Property='Background' Value='#E6F4EB'/><Setter TargetName='ring' Property='Stroke' Value='#128253'/>
+        <Setter TargetName='dot' Property='Visibility' Value='Visible'/>
+       </Trigger>
+       <Trigger Property='IsKeyboardFocused' Value='True'><Setter TargetName='shell' Property='BorderBrush' Value='#308A61'/></Trigger>
+       <Trigger Property='IsEnabled' Value='False'><Setter TargetName='shell' Property='Opacity' Value='0.52'/></Trigger>
+      </ControlTemplate.Triggers>
+     </ControlTemplate>
+    </Setter.Value>
+   </Setter>
+  </Style>
   <!-- ============ ComboBox ============ -->
   <Style TargetType='{x:Type ComboBoxItem}'>
    <Setter Property='Padding' Value='10,7'/>
@@ -295,6 +324,33 @@ namespace WeChatCleaner {
    <Setter Property='Template'>
     <Setter.Value>
      <ControlTemplate TargetType='{x:Type TextBox}'>
+      <Border x:Name='shell' Background='White' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='1' CornerRadius='8'>
+       <ScrollViewer x:Name='PART_ContentHost' Margin='{TemplateBinding Padding}' VerticalAlignment='Center' Focusable='False' HorizontalScrollBarVisibility='Hidden' VerticalScrollBarVisibility='Hidden'/>
+      </Border>
+      <ControlTemplate.Triggers>
+       <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='shell' Property='BorderBrush' Value='#B9D8C8'/></Trigger>
+       <Trigger Property='IsKeyboardFocusWithin' Value='True'>
+        <Setter TargetName='shell' Property='BorderBrush' Value='#16A267'/>
+        <Setter TargetName='shell' Property='Background' Value='#FBFEFC'/>
+       </Trigger>
+       <Trigger Property='IsEnabled' Value='False'><Setter TargetName='shell' Property='Opacity' Value='0.55'/></Trigger>
+      </ControlTemplate.Triggers>
+     </ControlTemplate>
+    </Setter.Value>
+   </Setter>
+  </Style>
+
+  <Style TargetType='{x:Type PasswordBox}'>
+   <Setter Property='Background' Value='White'/>
+   <Setter Property='Foreground' Value='#2F4A3E'/>
+   <Setter Property='BorderBrush' Value='#DCE7E0'/>
+   <Setter Property='BorderThickness' Value='1'/>
+   <Setter Property='FontSize' Value='12.5'/>
+   <Setter Property='Padding' Value='10,2'/>
+   <Setter Property='MinHeight' Value='32'/>
+   <Setter Property='Template'>
+    <Setter.Value>
+     <ControlTemplate TargetType='{x:Type PasswordBox}'>
       <Border x:Name='shell' Background='White' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='1' CornerRadius='8'>
        <ScrollViewer x:Name='PART_ContentHost' Margin='{TemplateBinding Padding}' VerticalAlignment='Center' Focusable='False' HorizontalScrollBarVisibility='Hidden' VerticalScrollBarVisibility='Hidden'/>
       </Border>

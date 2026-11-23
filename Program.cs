@@ -40,9 +40,8 @@ namespace WeChatCleaner {
   }
   static void LogCrash(Exception ex) {
    try {
-    string dir = SourceStore.Folder;
-    System.IO.Directory.CreateDirectory(dir);
-    System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "error.log"), ex.ToString(), Encoding.UTF8);
+    string file=ProfileStorage.WritePath("error.log");
+    File.WriteAllText(file,ex.ToString(),Encoding.UTF8);
    } catch {}
   }
  }

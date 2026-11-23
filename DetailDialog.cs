@@ -16,6 +16,7 @@ namespace WeChatCleaner {
   const string NoExtension = "无扩展名";
   readonly Category category;
   readonly bool permanent;
+  readonly string ffmpegPath, accountName;
   readonly Action<int> rememberPageSize;
   readonly Action<IEnumerable<string>> refresh;
   readonly Action<Engine.RecycleReport> cleanup;
@@ -38,14 +39,14 @@ namespace WeChatCleaner {
   public DetailDialog(Window owner, Account account, Category category, int pageSize, bool permanent)
    : this(owner,account,category,pageSize,permanent,null,null,null) { }
   internal DetailDialog(Window owner, Account account, Category category, int pageSize, bool permanent,
-    Action<int> remember, Action<IEnumerable<string>> refresh, Action<Engine.RecycleReport> cleanup)
-   : this(owner,account,category,pageSize,permanent,remember,refresh,cleanup,new Grid(),new StackPanel { Orientation = Orientation.Horizontal }) { }
+    Action<int> remember, Action<IEnumerable<string>> refresh, Action<Engine.RecycleReport> cleanup, string ffmpegPath=null)
+   : this(owner,account,category,pageSize,permanent,remember,refresh,cleanup,ffmpegPath,new Grid(),new StackPanel { Orientation = Orientation.Horizontal }) { }
   DetailDialog(Window owner, Account account, Category category, int pageSize, bool permanent,
-    Action<int> remember, Action<IEnumerable<string>> refresh, Action<Engine.RecycleReport> cleanup, Grid body, StackPanel footer)
+    Action<int> remember, Action<IEnumerable<string>> refresh, Action<Engine.RecycleReport> cleanup, string ffmpegPath, Grid body, StackPanel footer)
    : base(owner,category.Name + " · 文件明细",body,footer,1500,800,true,false,false) {
    Fit(owner,1500,800,820,455); AllowResize();
    this.category = category; this.permanent = permanent; this.pageSize = Math.Max(1,Math.Min(5000,pageSize));
-   this.rememberPageSize = remember; this.refresh = refresh; this.cleanup = cleanup;
+   this.rememberPageSize = remember; this.refresh = refresh; this.cleanup = cleanup; this.ffmpegPath=ffmpegPath; accountName=account.DisplayName;
    SetSubtitle(account.Group + " · " + account.DisplayName + "   /   " + category.RelativePath);
    body.RowDefinitions.Add(new RowDefinition());
    body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -183,10 +184,10 @@ namespace WeChatCleaner {
   }
   FrameworkElement Actions(Entry file) {
    var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-   panel.Children.Add(Ui.ActionButton("查看","用默认程序打开",delegate { FileActions.Open(this,file); }));
+   panel.Children.Add(Ui.ActionButton("查看","识别图片或语音后打开",delegate { FileActions.Open(this,file,ffmpegPath,accountName); }));
    panel.Children.Add(Ui.ActionButton("打开路径","在资源管理器中定位",delegate { FileActions.Reveal(this,file); }));
    panel.Children.Add(Ui.ActionButton("复制路径","复制完整路径",delegate { FileActions.Copy(this,file,Notice); }));
-   panel.Children.Add(Ui.ActionButton("另存为","复制到其他位置",delegate { FileActions.Save(this,file,Notice); }));
+   panel.Children.Add(Ui.ActionButton("另存为","按识别出的格式另存",delegate { FileActions.Save(this,file,Notice,ffmpegPath,accountName); }));
    if (!category.Protected) {
     var delete = Ui.ActionButton("删除",permanent ? "永久删除" : "移至回收站",delegate { Delete(file); });
     delete.Foreground = Ui.Danger; panel.Children.Add(delete);

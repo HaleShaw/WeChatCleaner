@@ -52,8 +52,10 @@ namespace WeChatCleaner {
   const int MaxProbeDirectories = 768, MaxEntriesPerRoot = 512, MaxConfigBytes = 16384;
 
   internal static List<Account> Find(IEnumerable<SourceEntry> saved, DiscoveryLocations locations, CancellationToken token) {
-   var finder = new Finder(locations, token);
-   foreach (var source in saved) {
+   var entries=saved.ToArray();
+   var ignored=entries.Where(s=>s.Excluded).Select(s=>new SourceEntry { Kind=s.Kind,Path=FullPath(s.Path,null,true) }).Where(s=>s.Path!=null).ToArray();
+   var finder = new Finder(locations, token, ignored);
+   foreach (var source in entries.Where(s=>!s.Excluded)) {
     if (token.IsCancellationRequested) break;
     finder.Check(source.Path, source.Kind, true);
    }
@@ -66,9 +68,14 @@ namespace WeChatCleaner {
    return finder.Accounts;
   }
 
+  static bool InSource(string root,string path) {
+   return ProfileStorage.Same(root,path) || Engine.IsInside(root,path);
+  }
+
   sealed class Finder {
    readonly DiscoveryLocations locations;
    readonly CancellationToken cancel;
+   readonly SourceEntry[] ignored;
    readonly Stopwatch elapsed = new Stopwatch();
    readonly HashSet<string> checkedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
    readonly HashSet<string> seenAccounts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -76,7 +83,7 @@ namespace WeChatCleaner {
    readonly HashSet<string> inspectedConfigs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
    int probes;
    internal readonly List<Account> Accounts = new List<Account>();
-   internal Finder(DiscoveryLocations locations, CancellationToken cancel) { this.locations = locations; this.cancel = cancel; }
+   internal Finder(DiscoveryLocations locations, CancellationToken cancel,SourceEntry[] ignored) { this.locations=locations; this.cancel=cancel; this.ignored=ignored; }
    bool Done { get { return cancel.IsCancellationRequested || elapsed.ElapsedMilliseconds >= 9000 || probes >= MaxProbeDirectories; } }
 
    internal void Check(string value, SourceKind kind, bool saved) {
@@ -87,6 +94,7 @@ namespace WeChatCleaner {
     try {
      foreach (var account in Engine.Discover(path, kind, saved ? Int32.MaxValue : MaxEntriesPerRoot,
          delegate { return cancel.IsCancellationRequested || (!saved && elapsed.ElapsedMilliseconds >= 9000); })) {
+      if (ignored.Any(s=>s.Kind==kind && InSource(s.Path,account.Path) && (!saved || !InSource(s.Path,path)))) continue;
       if (seenAccounts.Add((int)kind + "|" + account.Path)) Accounts.Add(account);
      }
     } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (System.Security.SecurityException) { } catch (ArgumentException) { }

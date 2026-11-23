@@ -9,43 +9,45 @@ namespace WeChatCleaner {
  public sealed class SourceEntry {
   public SourceKind Kind;
   public string Path;
+  internal bool Excluded;
   public string Root { get { return Path; } }
  }
 
  public static class SourceStore {
-  public static string Folder {
-   get {
-    string profile = Environment.GetEnvironmentVariable("WCC_PROFILE_DIR");
-    return String.IsNullOrWhiteSpace(profile) ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WeChatCleaner") : System.IO.Path.GetFullPath(profile);
-   }
-  }
-  public static string FilePath { get { return System.IO.Path.Combine(Folder, "sources.txt"); } }
+  public static string Folder { get { return ProfileStorage.App.Current.Path; } }
+  public static string FilePath { get { return ProfileStorage.ReadPath(ProfileStorage.SourcesFile); } }
 
   public static List<SourceEntry> Load() {
    var list = new List<SourceEntry>();
-   if (!File.Exists(FilePath)) return list;
+   string file=FilePath;
+   if (!File.Exists(file) || !Engine.LinkFree(file)) return list;
    string[] lines;
-   try { lines = File.ReadAllLines(FilePath, Encoding.UTF8); } catch { return list; }
+   try { lines = File.ReadAllLines(file, Encoding.UTF8); } catch { return list; }
    foreach (string line in lines) {
     if (String.IsNullOrEmpty(line)) continue;
     string[] parts = line.Split('\t');
     if (parts.Length < 2) continue;
+    bool excluded=parts[0]=="exclude";
+    int kindAt=excluded ? 1 : 0;
     int kind;
-    if (!Int32.TryParse(parts[0].Trim(), out kind)) continue;
-    if (kind < 0 || kind > 2) continue;
+    if (parts.Length<=kindAt+1 || !Int32.TryParse(parts[kindAt].Trim(),out kind) || kind<0 || kind>2) continue;
     string path;
-    try { path = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1].Trim())); } catch { continue; }
-    if (String.IsNullOrEmpty(path)) continue;
-    list.Add(new SourceEntry{ Kind=(SourceKind)kind, Path=path });
+    try { path=Encoding.UTF8.GetString(Convert.FromBase64String(parts[kindAt+1].Trim())); } catch { continue; }
+    try { if (!ProfileStorage.IsAbsolute(path)) continue; path=Engine.NormalPath(path); }
+    catch (Exception ex) { if (!ProfileStorage.Expected(ex)) throw; continue; }
+    list.Add(new SourceEntry { Kind=(SourceKind)kind,Path=path,Excluded=excluded });
    }
    return list;
   }
   public static bool Save(List<SourceEntry> list) {
    try {
-    System.IO.Directory.CreateDirectory(Folder);
-    var sb = new StringBuilder();
-    foreach (var s in list) sb.Append((int)s.Kind).Append('\t').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(s.Path))).Append('\n');
-    File.WriteAllText(FilePath, sb.ToString(), Encoding.UTF8);
+    string file=ProfileStorage.WritePath(ProfileStorage.SourcesFile);
+    var sb=new StringBuilder();
+    foreach (var s in list) {
+     if (s.Excluded) sb.Append("exclude\t");
+     sb.Append((int)s.Kind).Append('\t').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(s.Path))).Append('\n');
+    }
+    ProfileStorage.WriteText(file,sb.ToString());
     return true;
    } catch { return false; }
   }
@@ -61,11 +63,12 @@ namespace WeChatCleaner {
   public bool AutoStart = false;
   public int PageSize = 100;
   public string LastAccount;
+  public string FfmpegPath;
   /// When true the cleanup removes the files for good instead of using the recycle bin.
   public bool PermanentDelete = false;
   public Dictionary<string,string> CustomNames = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
 
-  public static string FilePath { get { return System.IO.Path.Combine(SourceStore.Folder, "settings.txt"); } }
+  public static string FilePath { get { return ProfileStorage.ReadPath(ProfileStorage.SettingsFile); } }
   /// When set, settings are read from and written to this file instead of the user profile.
   public string OverridePath;
   string TargetPath { get { return String.IsNullOrEmpty(OverridePath) ? FilePath : OverridePath; } }
@@ -75,9 +78,10 @@ namespace WeChatCleaner {
   /// Loads settings from an explicit file (null = the default location).
   public static AppSettings LoadFrom(string path) {
    var s = new AppSettings{ OverridePath = path };
-   if (!File.Exists(s.TargetPath)) return s;
+   string file=s.TargetPath;
+   if (!File.Exists(file) || !Engine.LinkFree(file)) return s;
    string[] lines;
-   try { lines = File.ReadAllLines(s.TargetPath, Encoding.UTF8); } catch { return s; }
+   try { lines = File.ReadAllLines(file, Encoding.UTF8); } catch { return s; }
    foreach (string line in lines) {
     if (String.IsNullOrEmpty(line)) continue;
     int i = line.IndexOf('=');
@@ -94,6 +98,7 @@ namespace WeChatCleaner {
      else if (k=="PageSize") s.PageSize = Int32.Parse(v);
      else if (k=="LastAccount") s.LastAccount = Encoding.UTF8.GetString(Convert.FromBase64String(v));
      else if (k=="PermanentDelete") s.PermanentDelete = v=="1";
+     else if (k=="FfmpegPath") s.FfmpegPath = Encoding.UTF8.GetString(Convert.FromBase64String(v));
      else if (k.StartsWith("name:")) {
       string key = k.Substring(5);
       byte[] raw = Convert.FromBase64String(v);
@@ -106,10 +111,10 @@ namespace WeChatCleaner {
    return s;
   }
 
-  public void Save() {
+  public bool Save() {
    try {
-    string dir = System.IO.Path.GetDirectoryName(TargetPath);
-    if (!String.IsNullOrEmpty(dir)) System.IO.Directory.CreateDirectory(dir);
+    string file=String.IsNullOrEmpty(OverridePath) ? ProfileStorage.WritePath(ProfileStorage.SettingsFile) : Engine.NormalPath(OverridePath);
+    if (!String.IsNullOrEmpty(OverridePath)) Directory.CreateDirectory(Path.GetDirectoryName(file));
     var sb = new StringBuilder();
     sb.Append("Days=").Append(Days).Append('\n');
     sb.Append("MinBytes=").Append(MinBytes).Append('\n');
@@ -120,10 +125,12 @@ namespace WeChatCleaner {
     sb.Append("PageSize=").Append(PageSize).Append('\n');
     if (!String.IsNullOrEmpty(LastAccount)) sb.Append("LastAccount=").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(LastAccount))).Append('\n');
     sb.Append("PermanentDelete=").Append(PermanentDelete?"1":"0").Append('\n');
+    if (!String.IsNullOrEmpty(FfmpegPath)) sb.Append("FfmpegPath=").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(FfmpegPath))).Append('\n');
     foreach (var kv in CustomNames)
      sb.Append("name:").Append(kv.Key).Append('=').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(kv.Value??""))).Append('\n');
-    File.WriteAllText(TargetPath, sb.ToString(), Encoding.UTF8);
-   } catch {}
+    ProfileStorage.WriteText(file,sb.ToString());
+    return true;
+   } catch { return false; }
   }
  }
 }

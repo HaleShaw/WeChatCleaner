@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -263,40 +262,6 @@ namespace WeChatCleaner {
     new ModalWindow(owner,"清理结果",details,Ui.ButtonRow(close),630,Math.Min(470,220+report.Errors.Count*36),true).ShowDialog();
    }
    return report;
-  }
- }
-
- internal static class FileActions {
-  internal static void Open(Window owner, Entry file) {
-   try {
-    string ext = (file.Type ?? "").ToLowerInvariant();
-    if (Array.IndexOf(new[]{".exe",".dll",".msi",".lnk",".url",".scr",".cmd",".bat",".com",".ps1",".hta",".vbs",".js",".reg",".wsf"},ext) >= 0) {
-     MessageBox.Show(owner,"此文件可能执行程序或脚本。可通过「打开路径」在资源管理器中查看。","无法安全预览",MessageBoxButton.OK,MessageBoxImage.Information); return;
-    }
-    if (!File.Exists(file.Path)) throw new IOException("文件已不存在，请刷新列表。");
-    Process.Start(file.Path);
-   } catch (Exception ex) { MessageBox.Show(owner,ex.Message,"无法查看文件",MessageBoxButton.OK,MessageBoxImage.Warning); }
-  }
-  internal static void Reveal(Window owner, Entry file) {
-   try {
-    if (!File.Exists(file.Path)) throw new IOException("文件已不存在，请刷新列表。");
-    Process.Start("explorer.exe", "/select,\"" + file.Path + "\"");
-   } catch (Exception ex) { MessageBox.Show(owner,ex.Message,"无法打开路径",MessageBoxButton.OK,MessageBoxImage.Warning); }
-  }
-  internal static void Copy(Window owner, Entry file, Action<string> notice) {
-   try { Clipboard.SetText(file.Path); notice("已复制完整路径"); }
-   catch (Exception ex) { MessageBox.Show(owner,ex.Message,"复制路径失败",MessageBoxButton.OK,MessageBoxImage.Warning); }
-  }
-  internal static void CopyTo(Entry file, string destination) {
-   if (String.Equals(Engine.NormalPath(file.Path),Engine.NormalPath(destination),StringComparison.OrdinalIgnoreCase))
-    throw new IOException("请另选保存位置，避免覆盖源文件。");
-   File.Copy(file.Path,destination,true);
-  }
-  internal static void Save(Window owner, Entry file, Action<string> notice) {
-   var dlg = new Microsoft.Win32.SaveFileDialog { FileName = file.Name, Title = "另存为", OverwritePrompt = true };
-   if (dlg.ShowDialog(owner) != true) return;
-   try { CopyTo(file,dlg.FileName); notice("已保存：" + Path.GetFileName(dlg.FileName)); }
-   catch (Exception ex) { MessageBox.Show(owner,ex.Message,"另存为失败",MessageBoxButton.OK,MessageBoxImage.Warning); }
   }
  }
 

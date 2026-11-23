@@ -9,6 +9,7 @@ namespace WeChatCleaner {
  internal sealed class DuplicateGroupDialog : ModalWindow {
   readonly DuplicateGroup group;
   readonly bool permanent;
+  readonly string ffmpegPath;
   readonly Func<Entry,string> ownerName;
   readonly Action<Engine.RecycleReport> cleanup;
   readonly TableView table;
@@ -18,12 +19,12 @@ namespace WeChatCleaner {
   List<FileChoice> rows=new List<FileChoice>();
   bool batch;
 
-  internal DuplicateGroupDialog(Window owner,DuplicateGroup group,bool permanent,Func<Entry,string> ownerName,Action<Engine.RecycleReport> cleanUp)
-   : this(owner,group,permanent,ownerName,cleanUp,new Grid(),new Grid()) { }
-  DuplicateGroupDialog(Window owner,DuplicateGroup group,bool permanent,Func<Entry,string> ownerName,Action<Engine.RecycleReport> cleanUp,Grid body,Grid foot)
+  internal DuplicateGroupDialog(Window owner,DuplicateGroup group,bool permanent,Func<Entry,string> ownerName,Action<Engine.RecycleReport> cleanUp,string ffmpegPath=null)
+   : this(owner,group,permanent,ownerName,cleanUp,ffmpegPath,new Grid(),new Grid()) { }
+  DuplicateGroupDialog(Window owner,DuplicateGroup group,bool permanent,Func<Entry,string> ownerName,Action<Engine.RecycleReport> cleanUp,string ffmpegPath,Grid body,Grid foot)
    : base(owner,"重复文件分组",body,foot,1160,590,true,true,false) {
    Fit(owner,1160,590,825,395); AllowResize();
-   this.group=group; this.permanent=permanent; this.ownerName=ownerName; cleanup=cleanUp;
+   this.group=group; this.permanent=permanent; this.ownerName=ownerName; cleanup=cleanUp; this.ffmpegPath=ffmpegPath;
    selectAll=Ui.CenterCheck("选择或取消选择本组所有文件");
    selectAll.Click+=delegate {
     bool enable=rows.Any(r=>!r.Included); batch=true;
@@ -52,8 +53,8 @@ namespace WeChatCleaner {
   }
   FrameworkElement Actions(Entry file) {
    var panel=new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Center, VerticalAlignment=VerticalAlignment.Center };
-   panel.Children.Add(Ui.ActionButton("查看","用默认程序打开",delegate { FileActions.Open(this,file); }));
-   panel.Children.Add(Ui.ActionButton("另存为","复制到其他位置",delegate { FileActions.Save(this,file,Notice); }));
+   panel.Children.Add(Ui.ActionButton("查看","识别图片或语音后打开",delegate { FileActions.Open(this,file,ffmpegPath,ownerName(file)); }));
+   panel.Children.Add(Ui.ActionButton("另存为","按识别出的格式另存",delegate { FileActions.Save(this,file,Notice,ffmpegPath,ownerName(file)); }));
    var del=Ui.ActionButton("删除",permanent?"永久删除":"移至回收站",delegate { Run(new[]{file}); });
    del.Foreground=Ui.Danger; panel.Children.Add(del); return panel;
   }
